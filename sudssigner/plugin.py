@@ -20,15 +20,20 @@ def lxml_ns(suds_ns):
     return dict((suds_ns,))
 
 
-def ns_id(tagname, suds_ns):
-    return '{{{0}}}{1}'.format(suds_ns[1], tagname)
+def ns_id(tagname, ns_tuple):
+    """Expand element name with namespace
+
+    Args:
+        tagname (str): tagname without prefix / namespace
+        ns_tuple (tuple(str,str)): prefix, namespace tuple as given by suds
+    """
+    return '{%s}%s' % (ns_tuple[1], tagname)
 
 
-LXML_ENV = lxml_ns(envns)
-BODY_XPATH = etree.XPath('/SOAP-ENV:Envelope/SOAP-ENV:Body', namespaces=LXML_ENV)
-HEADER_XPATH = etree.XPath('/SOAP-ENV:Envelope/SOAP-ENV:Header', namespaces=LXML_ENV)
-SECURITY_XPATH = etree.XPath('wsse:Security', namespaces=lxml_ns(wssens))
-TIMESTAMP_XPATH = etree.XPath('wsu:Timestamp', namespaces=lxml_ns(wsuns))
+HEADER_XPATH = etree.XPath('/$:Envelope/$:Header'.replace('$', envns[0]), namespaces=lxml_ns(envns))
+BODY_XPATH = etree.XPath('/$:Envelope/$:Body'.replace('$', envns[0]), namespaces=lxml_ns(envns))
+SECURITY_XPATH = etree.XPath('%s:Security' % wssens[0], namespaces=lxml_ns(wssens))
+TIMESTAMP_XPATH = etree.XPath('%s:Timestamp' % wsuns[0], namespaces=lxml_ns(wsuns))
 C14N = 'http://www.w3.org/2001/10/xml-exc-c14n#'
 B64ENC = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary'
 X509PROFILE = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-x509-token-profile-1.0#X509v3'
@@ -49,7 +54,7 @@ class SignerPlugin(MessagePlugin):
     """
     Digital signature plugin for suds >= 0.4.1
     This plugins uses suds plugin "sending" hook to add
-    a XML digital signature for the SOAP:Body tag.
+    a XML digital signature for the SOAP-ENV:Body tag.
     Arguments:
     - keyfile: RSA/DSA key filename + certificate in PEM format
     - keytype: DSA or RSA. Tries to detect key type
@@ -102,7 +107,10 @@ class SignerPlugin(MessagePlugin):
         sending plugin method: add security headers and sign msg
         """
         env = etree.fromstring(context.envelope)
-        (body,) = BODY_XPATH(env)
+        try:
+            body = BODY_XPATH(env)[0]
+        except IndexError:
+            raise ValueError("SOAP request has no body.")
         queue = SignQueue()
         queue.push_and_mark(body)
         security = ensure_security_header(env, queue)
@@ -203,7 +211,11 @@ def set_algorithm(parent, name, value):
 
 
 def ensure_security_header(env, queue):
-    (header,) = HEADER_XPATH(env)
+    try:
+        header = HEADER_XPATH(env)[0]
+    except IndexError:
+        header = etree.Element(ns_id('Header', envns), nsmap=env.nsmap)
+        env.insert(0, header)
     security = SECURITY_XPATH(header)
     if security:
         for timestamp in TIMESTAMP_XPATH(security[0]):
